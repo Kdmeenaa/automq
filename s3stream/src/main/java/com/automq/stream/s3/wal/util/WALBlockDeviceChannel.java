@@ -94,11 +94,17 @@ public class WALBlockDeviceChannel extends AbstractWALChannel {
         if (null == lib) {
             throw new RuntimeException("O_DIRECT not supported");
         }
-//        int blockSize = lib.blockSize();
-//        if (WALUtil.BLOCK_SIZE % blockSize != 0) {
-//            throw new RuntimeException(String.format("block size %d is not a multiple of %d, update it by jvm option: -D%s=%d",
-//                WALUtil.BLOCK_SIZE, blockSize, WALUtil.BLOCK_SIZE_PROPERTY, blockSize));
-//        }
+        int blockSize = lib.blockSize();
+        if (WALUtil.BLOCK_SIZE % blockSize != 0) {
+            try {
+                throw new RuntimeException(String.format("block size %d is not a multiple of %d, update it by jvm option: -D%s=%d",
+                    WALUtil.BLOCK_SIZE, blockSize, WALUtil.BLOCK_SIZE_PROPERTY, blockSize));
+            }
+            catch(Exception e) {
+                System.out.println("[dio] block size not multiple");
+                e.printStackTrace();
+            }
+        }
         this.directIOLib = lib;
     }
 

@@ -132,6 +132,7 @@ public class DirectIOLib {
             // get file system block size for use with workingDir
             // see "man 3 posix_memalign" for why we do this
             fsBlockSize = pathconf(fileOrDir, PC_REC_XFER_ALIGN);
+            System.out.println("[dio] posix_memalign: " + fsBlockSize);
             /* conservative for version >= 2.6
              * "man 2 open":
              *
@@ -143,6 +144,7 @@ public class DirectIOLib {
             // we will do this too in case the page size and the block size are different for
             // whatever reason. By taking the least common multiple, everything should be happy:
             int pageSize = getpagesize();
+            System.out.println("[dio] pageSize: " + pageSize);
             fsBlockSize = lcm(fsBlockSize, pageSize);
 
             // just being completely paranoid:
