@@ -121,7 +121,9 @@ public class WALBlockDeviceChannel extends AbstractWALChannel {
                 " Add --add-opens=java.base/java.nio=ALL-UNNAMED and -Dio.netty.tryReflectionSetAccessible=true to JVM options may fix this.";
         }
         if (!isBlockDevice(path)) {
+            long startTime = System.currentTimeMillis();
             String reason = tryOpenFileWithDirectIO(String.format(CHECK_DIRECT_IO_AVAILABLE_FORMAT, path));
+            System.out.println("[dio checkAvailable inner] checkAvailable cost:" + (System.currentTimeMillis() - startTime) + "ms");
             if (null != reason) {
                 return "O_DIRECT not supported by the file system, path: " + path + ", reason: " + reason;
             }

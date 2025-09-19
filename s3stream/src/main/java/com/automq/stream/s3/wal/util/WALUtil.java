@@ -129,8 +129,11 @@ public class WALUtil {
      * Note {@code path} must NOT exist.
      */
     public static void createFile(String path, long length) throws IOException {
+
+        long start =System.currentTimeMillis();
         File file = new File(path);
         assert !file.exists();
+        System.out.println("[dio open inner] file.exists(): " + (System.currentTimeMillis() - start) + "ms");
 
         File parent = file.getParentFile();
         if (null != parent && !parent.exists() && !parent.mkdirs()) {
@@ -146,10 +149,12 @@ public class WALUtil {
             throw new IOException("set " + path + " writable fail");
         }
 
+        start =System.currentTimeMillis();
         // set length
         try (RandomAccessFile raf = new RandomAccessFile(file, "rw")) {
             raf.setLength(length);
         }
+        System.out.println("[dio open inner] RandomAccessFile: " + (System.currentTimeMillis() - start) + "ms");
     }
 
     /**
