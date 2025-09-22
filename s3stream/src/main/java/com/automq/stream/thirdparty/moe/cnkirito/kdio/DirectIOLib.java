@@ -172,11 +172,11 @@ public class DirectIOLib {
             fsBlockSize = lcm(fsBlockSize, 512);
 
             // lastly, a sanity check
-            if (fsBlockSize <= 0 || ((fsBlockSize & (fsBlockSize - 1)) != 0)) {
-                LOGGER.warn("file system block size should be a power of two, was found to be " + fsBlockSize);
-                LOGGER.warn("Disabling O_DIRECT support");
-                return -1;
-            }
+//            if (fsBlockSize <= 0 || ((fsBlockSize & (fsBlockSize - 1)) != 0)) {
+//                LOGGER.warn("file system block size should be a power of two, was found to be " + fsBlockSize);
+//                LOGGER.warn("Disabling O_DIRECT support");
+//                return -1;
+//            }
         }
 
         return fsBlockSize;
