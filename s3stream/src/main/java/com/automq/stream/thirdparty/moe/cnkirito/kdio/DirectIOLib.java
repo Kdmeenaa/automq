@@ -319,7 +319,7 @@ public class DirectIOLib {
 
         int n = pwrite(fd, pointer.share(start), new NativeLong(toWrite), new NativeLong(offset)).intValue();
         if (n < 0) {
-            throw new IOException("error writing file at offset " + offset + ": " + getLastError());
+            throw new IOException("return n:" + n + ", error writing file at offset " + offset + ": " + getLastError());
         }
         buf.position(start + n);
         return n;
