@@ -106,9 +106,11 @@ public class SnapshotReadCache {
                     activeStream(streamId);
                 }
                 if (batch.getBaseOffset() < expectedNextOffset.get()) {
+                    LOGGER.warn("drop {} {} < {}", streamId, batch.getBaseOffset(), expectedNextOffset.get());
                     batch.release();
                     continue;
                 } else if (batch.getBaseOffset() > expectedNextOffset.get()) {
+                    LOGGER.warn("cleanup {}", streamId);
                     // The LogCacheBlock doesn't accept discontinuous record batches.
                     cache.clearStreamRecords(streamId);
                 }
