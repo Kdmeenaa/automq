@@ -1374,11 +1374,12 @@ public final class QuorumController implements Controller {
             fatalFaultHandler.handleFault("exception while claiming leadership", e);
         }
     }
-    private static FingerPrintControlManagerV1 loadFingerPrintControlManager() {
+    private FingerPrintControlManagerV1 loadFingerPrintControlManager() {
         try {
             ServiceLoader<FingerPrintControlManagerV1> loader =
                 ServiceLoader.load(FingerPrintControlManagerV1.class, QuorumController.class.getClassLoader());
             for (FingerPrintControlManagerV1 impl : loader) {
+                log.info("FingerPrintControlManagerV1 successful loaded : " + FingerPrintControlManagerV1.class.getName());
                 return impl;
             }
         } catch (Throwable ignore) {
@@ -2298,7 +2299,7 @@ public final class QuorumController implements Controller {
         this.nodeControlManager = new NodeControlManager(snapshotRegistry, new DefaultNodeRuntimeInfoManager(clusterControl, streamControlManager));
         this.routerChannelEpochControlManager = new RouterChannelEpochControlManager(snapshotRegistry, this, nodeControlManager, time);
         this.extension = extension.apply(this);
-        this.fingerPrintControlManager = fingerPrintControlManager;
+        this.fingerPrintControlManager = loadFingerPrintControlManager();
 
         // set the nodeControlManager here to avoid circular dependency
         this.replicationControl.setNodeControlManager(nodeControlManager);
