@@ -1,8 +1,5 @@
 package org.apache.kafka.controller;
 
-
-import org.apache.kafka.common.Reconfigurable;
-
 import java.util.Map;
 
 public interface FingerPrintControlManagerV1  {
