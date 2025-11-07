@@ -2464,7 +2464,8 @@ public final class QuorumController implements Controller {
         Map<ConfigResource, Map<String, Entry<OpType, String>>> configChanges,
         boolean validateOnly
     ) {
-        log.info("incrementalAlterConfigs excuted");
+        log.info("incrementalAlterConfigs excuted: {}", validateOnly);
+        log.debug("Validate-only CreatePartitions result(s): {}", context.toString());
         if (configChanges.isEmpty()) {
             return CompletableFuture.completedFuture(Collections.emptyMap());
         }
