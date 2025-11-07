@@ -1380,7 +1380,7 @@ public final class QuorumController implements Controller {
             ServiceLoader<FingerPrintControlManagerV1> loader =
                 ServiceLoader.load(FingerPrintControlManagerV1.class, QuorumController.class.getClassLoader());
             for (FingerPrintControlManagerV1 impl : loader) {
-                log.info("FingerPrintControlManagerV1 successful loaded : " + FingerPrintControlManagerV1.class.getName());
+                log.info("FingerPrintControlManagerV1 successful loaded : " + impl.getClass().getName());
                 return impl;
             }
         } catch (Throwable ignore) {
@@ -2474,8 +2474,8 @@ public final class QuorumController implements Controller {
             if (installId.isEmpty()) {
 //                throw new RuntimeException();
             }
-            Map<String, String> stringStringMap = configurationControl.clusterConfig();
-            fingerPrintControlManager.checkLicense(stringStringMap, installId);
+            Map<String, String> configMap = configurationControl.clusterConfig();
+            fingerPrintControlManager.checkLicense(configMap, installId);
         }
         //inject end
 
