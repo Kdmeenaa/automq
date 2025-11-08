@@ -1,6 +1,7 @@
 package org.apache.kafka.controller;
 
 import org.apache.kafka.common.Reconfigurable;
+import org.apache.kafka.common.metadata.FingerPrintRecord;
 
 import java.util.Map;
 
@@ -11,7 +12,7 @@ public interface FingerPrintControlManagerV1  extends Reconfigurable {
 
 //    void startScheduleCheck();
 //
-//    void replay(FingerPrintRecord record);
+    void replay(FingerPrintRecord record);
 //
-//    boolean exists();
+    boolean recordExists();
 }

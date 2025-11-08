@@ -1402,8 +1402,8 @@ public final class QuorumController implements Controller {
                     featureControl);
                 //v2
                 List<ApiMessageAndVersion> all = new ArrayList<>(base.records());
-                if (fingerPrintControlManager != null) {
-//                if (fingerPrintControlManager != null && !fingerPrintControlManager.exists()) {
+//                if (fingerPrintControlManager != null) {
+                if (fingerPrintControlManager != null && !fingerPrintControlManager.recordExists()) {
                     long now = time.milliseconds();
                     ApiMessageAndVersion fingerPrintRecord = new ApiMessageAndVersion(
                         new FingerPrintRecord().setMaxNodeCount(5).setCreatedTimestamp(now),
