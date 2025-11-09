@@ -205,6 +205,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Random;
+import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -294,6 +295,7 @@ public final class QuorumController implements Controller {
         private StreamClient streamClient;
         private List<String> quorumVoters = Collections.emptyList();
         private Function<QuorumController, QuorumControllerExtension> extension = c -> QuorumControllerExtension.NOOP;
+        private FingerPrintControlManagerV1 fingerPrintControlManager;
         // AutoMQ for Kafka inject end
 
         public Builder(int nodeId, String clusterId) {
@@ -357,6 +359,11 @@ public final class QuorumController implements Controller {
 
         public Builder setReplicaPlacer(ReplicaPlacer replicaPlacer) {
             this.replicaPlacer = replicaPlacer;
+            return this;
+        }
+
+        public Builder setFingerPrintControlManager(FingerPrintControlManagerV1 fingerPrintControlManager) {
+            this.fingerPrintControlManager = fingerPrintControlManager;
             return this;
         }
 
@@ -533,6 +540,7 @@ public final class QuorumController implements Controller {
                     streamClient,
                     quorumVoters,
                     extension,
+                    fingerPrintControlManager,
                     // AutoMQ inject end
                     uncleanLeaderElectionCheckIntervalMs,
                     interBrokerListenerName
@@ -2121,17 +2129,68 @@ public final class QuorumController implements Controller {
     // AutoMQ for Kafka inject end
 
 
+    // private FingerPrintControlManagerV1 loadFingerPrintControlManager() {
+    //     try {
+    //         log.info("loadFingerPrintControlManager excuted");
+    //         ServiceLoader<FingerPrintControlManagerV1> loader =
+    //             ServiceLoader.load(FingerPrintControlManagerV1.class, QuorumController.class.getClassLoader());
+    //         for (FingerPrintControlManagerV1 impl : loader) {
+    //             log.info("FingerPrintControlManagerV1 successful loaded : " + impl.getClass().getName());
+    //             return impl;
+    //         }
+    //     } catch (Throwable ignore) {
+    //         log.info("loadFingerPrintControlManager error");
+    //     }
+    //     return null;
+    // }
     private FingerPrintControlManagerV1 loadFingerPrintControlManager() {
         try {
-            log.info("loadFingerPrintControlManager excuted");
+            log.info("loadFingerPrintControlManager executed");
+            ClassLoader classLoader = QuorumController.class.getClassLoader();
+            log.info("Using ClassLoader: {}", classLoader);
+            log.info("ClassLoader class: {}", classLoader != null ? classLoader.getClass().getName() : "null");
+
             ServiceLoader<FingerPrintControlManagerV1> loader =
-                ServiceLoader.load(FingerPrintControlManagerV1.class, QuorumController.class.getClassLoader());
-            for (FingerPrintControlManagerV1 impl : loader) {
-                log.info("FingerPrintControlManagerV1 successful loaded : " + impl.getClass().getName());
-                return impl;
+                ServiceLoader.load(FingerPrintControlManagerV1.class, classLoader);
+            log.info("ServiceLoader created for: {}", FingerPrintControlManagerV1.class.getName());
+
+            // 使用显式的 Iterator，这样可以捕获 ServiceConfigurationError
+            Iterator<FingerPrintControlManagerV1> iterator = loader.iterator();
+            log.info("Got iterator from ServiceLoader");
+
+            int count = 0;
+            while (iterator.hasNext()) {
+                count++;
+                try {
+                    FingerPrintControlManagerV1 impl = iterator.next();
+                    log.info("FingerPrintControlManagerV1 successful loaded #{}: {}",
+                        count, impl.getClass().getName());
+                    return impl;
+                } catch (ServiceConfigurationError e) {
+                    // ServiceConfigurationError 在 iterator.next() 时抛出
+                    log.error("ServiceConfigurationError loading implementation #{}: {}",
+                        count, e.getMessage(), e);
+                    if (e.getCause() != null) {
+                        log.error("Caused by: {}", e.getCause().getMessage(), e.getCause());
+                    }
+                    // 继续尝试下一个
+                    continue;
+                }
             }
-        } catch (Throwable ignore) {
-            log.info("loadFingerPrintControlManager error");
+
+            log.warn("ServiceLoader found {} implementations", count);
+
+            // 尝试检查配置文件是否存在
+            String serviceFile = "META-INF/services/" + FingerPrintControlManagerV1.class.getName();
+            java.net.URL resource = classLoader.getResource(serviceFile);
+            if (resource != null) {
+                log.info("Service configuration file found at: {}", resource);
+            } else {
+                log.warn("Service configuration file NOT found: {}", serviceFile);
+            }
+
+        } catch (Throwable e) {
+            log.error("loadFingerPrintControlManager error", e);
         }
         return null;
     }
@@ -2171,6 +2230,7 @@ public final class QuorumController implements Controller {
         StreamClient streamClient,
         List<String> quorumVoters,
         Function<QuorumController, QuorumControllerExtension> extension,
+        FingerPrintControlManagerV1 fingerPrintControlManager,
         // AutoMQ inject end
 
         long uncleanLeaderElectionCheckIntervalMs,
