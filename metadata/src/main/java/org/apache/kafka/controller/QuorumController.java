@@ -143,6 +143,8 @@ import org.apache.kafka.common.security.token.delegation.internals.DelegationTok
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.common.utils.Utils;
+import static org.apache.kafka.controller.QuorumController.ControllerOperationFlag.DOES_NOT_UPDATE_QUEUE_TIME;
+import static org.apache.kafka.controller.QuorumController.ControllerOperationFlag.RUNS_IN_PREMIGRATION;
 import org.apache.kafka.controller.errors.ControllerExceptions;
 import org.apache.kafka.controller.errors.EventHandlerExceptionInfo;
 import org.apache.kafka.controller.metrics.QuorumControllerMetrics;
@@ -191,6 +193,7 @@ import org.apache.kafka.timeline.SnapshotRegistry;
 
 import org.slf4j.Logger;
 
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -1385,6 +1388,7 @@ public final class QuorumController implements Controller {
                 if (fingerPrintControlManager != null) {
                     fingerPrintControlManager.startScheduleCheck();
                     if (!fingerPrintControlManager.recordExists()) {
+                        log.info("start writing fingerprint records");
                         long now = time.milliseconds();
                         ApiMessageAndVersion fingerPrintRecord = new ApiMessageAndVersion(
                             new FingerPrintRecord().setMaxNodeCount(5).setCreatedTimestamp(now),
@@ -1392,7 +1396,7 @@ public final class QuorumController implements Controller {
                         all.add(fingerPrintRecord);
                     }
                 }
-                log.info("Active Controller elected complete");
+                log.info("Active Controller elected complete, fingerPrintControlManager is {}", fingerPrintControlManager);
                 return ControllerResult.atomicOf(all, null);
             } catch (Throwable t) {
                 throw fatalFaultHandler.handleFault("exception while completing controller " +
@@ -2512,9 +2516,37 @@ public final class QuorumController implements Controller {
         ControllerRequestContext context,
         Map<ConfigResource, Map<String, String>> newConfigs, boolean validateOnly
     ) {
+        log.info("legacyAlterConfigs executed");
         if (newConfigs.isEmpty()) {
             return CompletableFuture.completedFuture(Collections.emptyMap());
         }
+
+        //inject start
+        if (null != fingerPrintControlManager) {
+            log.info("legacyAlterConfigs automq inject executed");
+            String installId = fingerPrintControlManager.installId();
+            if (installId.isEmpty()) {
+                log.info("installId in legacyAlterConfigs got null");
+//                throw new RuntimeException();
+            }
+            // Convert Map<ConfigResource, Map<String, String>> to Map<ConfigResource, Map<String, Entry<OpType, String>>>
+            // For legacy API, all operations are SET operations
+            Map<ConfigResource, Map<String, Entry<OpType, String>>> configChanges = new HashMap<>();
+            for (Map.Entry<ConfigResource, Map<String, String>> resourceEntry : newConfigs.entrySet()) {
+                ConfigResource resource = resourceEntry.getKey();
+                Map<String, Entry<OpType, String>> configMap = new HashMap<>();
+                for (Map.Entry<String, String> configEntry : resourceEntry.getValue().entrySet()) {
+                    configMap.put(configEntry.getKey(),
+                        new AbstractMap.SimpleEntry<>(OpType.SET, configEntry.getValue()));
+                }
+                configChanges.put(resource, configMap);
+            }
+            log.info("legacyAlterConfigs automq check license executed");
+            fingerPrintControlManager.updateDynamicConfig(configChanges);
+            fingerPrintControlManager.checkLicense();
+        }
+        //inject end
+
         return appendWriteEvent("legacyAlterConfigs", context.deadlineNs(), () -> {
             ControllerResult<Map<ConfigResource, ApiError>> result =
                 configurationControl.legacyAlterConfigs(newConfigs, false);
