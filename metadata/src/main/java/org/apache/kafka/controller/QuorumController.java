@@ -1411,6 +1411,7 @@ public final class QuorumController implements Controller {
                     all.add(fingerPrintRecord);
 //                    fingerPrintControlManager.startScheduleCheck();
                 }
+                log.info("Active Controller elected complete");
                 return ControllerResult.atomicOf(all, null);
             } catch (Throwable t) {
                 throw fatalFaultHandler.handleFault("exception while completing controller " +
