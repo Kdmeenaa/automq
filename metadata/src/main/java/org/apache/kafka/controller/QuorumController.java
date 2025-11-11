@@ -2146,48 +2146,28 @@ public final class QuorumController implements Controller {
     // }
     private FingerPrintControlManagerV1 loadFingerPrintControlManager() {
         try {
-            log.info("loadFingerPrintControlManager executed");
-            ClassLoader classLoader = QuorumController.class.getClassLoader();
-
             ServiceLoader<FingerPrintControlManagerV1> loader =
-                ServiceLoader.load(FingerPrintControlManagerV1.class, classLoader);
-            log.info("ServiceLoader created for: {}", FingerPrintControlManagerV1.class.getName());
+                ServiceLoader.load(FingerPrintControlManagerV1.class, QuorumController.class.getClassLoader());
 
             Iterator<FingerPrintControlManagerV1> iterator = loader.iterator();
-            int count = 0;
-            while (iterator.hasNext()) {
-                count++;
+            if (iterator.hasNext()) {
+                FingerPrintControlManagerV1 impl = iterator.next();
                 try {
-                    FingerPrintControlManagerV1 impl = iterator.next();
-                    log.info("FingerPrintControlManagerV1 successful loaded #{}: {}",
-                        count, impl.getClass().getName());
-                    return impl;
-                } catch (ServiceConfigurationError e) {
-                    log.error("ServiceConfigurationError loading implementation #{}: {}",
-                        count, e.getMessage(), e);
-                    if (e.getCause() != null) {
-                        log.error("Caused by: {}", e.getCause().getMessage(), e.getCause());
-                    }
-                    continue;
+                    impl.getClass()
+                        .getMethod("initialize", QuorumController.class, ClusterControlManager.class)
+                        .invoke(impl, this, this.clusterControl());
+                } catch (Exception e) {
+                    log.warn("Failed to initialize dependencies: {}", e.getMessage());
                 }
+
+                return impl;
             }
-
-            log.warn("ServiceLoader found {} implementations", count);
-
-            // 尝试检查配置文件是否存在
-            String serviceFile = "META-INF/services/" + FingerPrintControlManagerV1.class.getName();
-            java.net.URL resource = classLoader.getResource(serviceFile);
-            if (resource != null) {
-                log.info("Service configuration file found at: {}", resource);
-            } else {
-                log.warn("Service configuration file NOT found: {}", serviceFile);
-            }
-
-        } catch (Throwable e) {
-            log.error("loadFingerPrintControlManager error", e);
+        } catch (Exception e) {
+            log.error("Failed to load FingerPrintControlManager", e);
         }
         return null;
     }
+
     private QuorumController(
         FaultHandler nonFatalFaultHandler,
         FaultHandler fatalFaultHandler,
