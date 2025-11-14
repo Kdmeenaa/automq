@@ -563,7 +563,12 @@ class BrokerServer(
 //      todo
       FingerPrintControlManagerProvider.setMetadataCache(metadataCache);
       info("checking cluster nodes count..")
-      if (!fingerPrintControlManagerV1.isActiveBrokerCountWithinLimit) return
+      if (!fingerPrintControlManagerV1.isActiveBrokerCountWithinLimit) {
+        maybeChangeStatus(STARTING, SHUTDOWN)
+        fatal("Due to broker count limit. Prepare to shutdown")
+        shutdown()
+        return
+      }
       info("nodes count check passed,broker starting...")
 
       // Now that we have loaded some metadata, we can log a reasonably up-to-date broker

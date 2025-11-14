@@ -114,7 +114,7 @@ public final class FingerPrintControlManagerProvider {
                 ClusterControlManager.class
             );
             initializeMethod.invoke(manager, controller, clusterControlManager);
-        }catch (Throwable t) {
+        } catch (Throwable t) {
             LOG.warn("Failed to initialize FingerPrintControlManagerV1 implementation {}", manager.getClass().getName(), t);
         }
     }
@@ -127,7 +127,7 @@ public final class FingerPrintControlManagerProvider {
                 MetadataCache.class
             );
             initializeMethod.invoke(manager, metadataCache);
-        }catch (Throwable t) {
+        } catch (Throwable t) {
 
         }
     }
