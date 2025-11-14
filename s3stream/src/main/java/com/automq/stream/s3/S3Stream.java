@@ -87,6 +87,7 @@ public class S3Stream implements Stream, StreamMetadataListener {
     private final ReentrantLock appendLock = new ReentrantLock();
     private final Set<CompletableFuture<?>> pendingAppends = ConcurrentHashMap.newKeySet();
     private final Deque<Long> pendingAppendTimestamps = new ConcurrentLinkedDeque<>();
+    private volatile CompletableFuture<AppendResult> lastAppendFuture;
     private final Set<CompletableFuture<?>> pendingFetches = ConcurrentHashMap.newKeySet();
     private final Deque<Long> pendingFetchTimestamps = new ConcurrentLinkedDeque<>();
     private final OpenStreamOptions options;
@@ -191,7 +192,8 @@ public class S3Stream implements Stream, StreamMetadataListener {
             CompletableFuture<AppendResult> cf = exec(() -> {
                 appendLock.lock();
                 try {
-                    return append0(context, recordBatch);
+                    this.lastAppendFuture = append0(context, recordBatch);
+                    return lastAppendFuture;
                 } finally {
                     appendLock.unlock();
                 }
@@ -371,6 +373,9 @@ public class S3Stream implements Stream, StreamMetadataListener {
     public CompletableFuture<Void> close(boolean force) {
         if (snapshotRead()) {
             listenerHandle.close();
+            NetworkStats.getInstance().removeStreamReadBytesStats(streamId);
+            S3StreamMetricsManager.removePendingStreamAppendLatencySupplier(streamId);
+            S3StreamMetricsManager.removePendingStreamFetchLatencySupplier(streamId);
             return CompletableFuture.completedFuture(null);
         }
         TimerUtil timerUtil = new TimerUtil();
@@ -446,6 +451,11 @@ public class S3Stream implements Stream, StreamMetadataListener {
         } finally {
             writeLock.unlock();
         }
+    }
+
+    @Override
+    public CompletableFuture<AppendResult> lastAppendFuture() {
+        return lastAppendFuture;
     }
 
     public boolean snapshotRead() {

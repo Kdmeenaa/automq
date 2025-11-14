@@ -9,6 +9,7 @@ import com.automq.stream.utils.threads.S3StreamThreadPoolMonitor
 import kafka.automq.interceptor.{ClientIdKey, ClientIdMetadata, TrafficInterceptor}
 import kafka.automq.kafkalinking.KafkaLinkingManager
 import kafka.automq.partition.snapshot.PartitionSnapshotsManager
+import kafka.automq.zerozone.ZeroZoneThreadLocalContext
 import kafka.cluster.Partition
 import kafka.log.remote.RemoteLogManager
 import kafka.log.streamaspect.{ElasticLogManager, OpenHint, PartitionStatusTracker, ReadHint}
@@ -624,7 +625,7 @@ class ElasticReplicaManager(
     if (handler == null) {
       // the handler will be null if it timed out to acquire from limiter
       fetchLimiterTimeoutCounterMap.get(limiter.name).add(MetricsLevel.INFO, 1)
-      // warn(s"Returning emtpy fetch response for fetch request $readPartitionInfo since the wait time exceeds $timeoutMs ms.")
+      // warn(s"Returning empty fetch response for fetch request $readPartitionInfo since the wait time exceeds $timeoutMs ms.")
       ElasticReplicaManager.emptyReadResults(readPartitionInfo.map(_._1))
     } else {
       try {
@@ -1438,7 +1439,7 @@ class ElasticReplicaManager(
       transactionWaitingForValidationMap.computeIfAbsent(producerId, _ => {
         Verification(
           new AtomicBoolean(false),
-          new ArrayBlockingQueue[TransactionVerificationRequest](5),
+          new LinkedBlockingQueue[TransactionVerificationRequest](),
           new AtomicLong(time.milliseconds()))
       })
     } else {
@@ -1466,24 +1467,30 @@ class ElasticReplicaManager(
     verification: Verification,
     callback: (RequestLocal, T) => Unit,
   ): (RequestLocal, T) => Unit = {
+    val writeContext = ZeroZoneThreadLocalContext.writeContext().detach()
     (requestLocal, args) => {
       try {
+        // The thread switch, so we need to attach the write context to the current thread.
+        ZeroZoneThreadLocalContext.attach(writeContext)
         callback(requestLocal, args)
       } catch {
         case e: Throwable =>
           error("Error in transaction verification callback", e)
       }
       if (verification != null) {
+        var request: TransactionVerificationRequest = null
         verification.synchronized {
           verification.timestamp.set(time.milliseconds())
           if (!verification.waitingRequests.isEmpty) {
             // Since the callback thread and task thread may be different, we need to ensure that the tasks are executed sequentially.
-            val request = verification.waitingRequests.poll()
-            request.task()
+            request = verification.waitingRequests.poll()
           } else {
             // If there are no tasks in the queue, set hasInflight to false
             verification.hasInflight.set(false)
           }
+        }
+        if (request != null) {
+          request.task()
         }
         val lastCleanTimestamp = lastTransactionCleanTimestamp.get();
         val now = time.milliseconds()

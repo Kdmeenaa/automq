@@ -1,5 +1,7 @@
 package com.automq.stream.s3.cache;
 
+import com.automq.stream.ByteBufSeqAlloc;
+import com.automq.stream.api.LinkRecordDecoder;
 import com.automq.stream.s3.DataBlockIndex;
 import com.automq.stream.s3.ObjectReader;
 import com.automq.stream.s3.metadata.S3ObjectMetadata;
@@ -33,11 +35,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
@@ -46,7 +49,10 @@ import java.util.stream.Collectors;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 
+import static com.automq.stream.s3.ByteBufAlloc.SNAPSHOT_READ_CACHE;
+
 public class SnapshotReadCache {
+    public static final ByteBufSeqAlloc ENCODE_ALLOC = new ByteBufSeqAlloc(SNAPSHOT_READ_CACHE, 8);
     private static final Logger LOGGER = LoggerFactory.getLogger(SnapshotReadCache.class);
     private static final long MAX_INFLIGHT_LOAD_BYTES = 100L * 1024 * 1024;
 
@@ -66,10 +72,11 @@ public class SnapshotReadCache {
     private final StreamManager streamManager;
     private final LogCache cache;
     private final ObjectStorage objectStorage;
-    private final Function<StreamRecordBatch, CompletableFuture<StreamRecordBatch>> linkRecordDecoder;
+    private final LinkRecordDecoder linkRecordDecoder;
     private final Time time = Time.SYSTEM;
 
-    public SnapshotReadCache(StreamManager streamManager, LogCache cache, ObjectStorage objectStorage, Function<StreamRecordBatch, CompletableFuture<StreamRecordBatch>> linkRecordDecoder) {
+    public SnapshotReadCache(StreamManager streamManager, LogCache cache, ObjectStorage objectStorage,
+        LinkRecordDecoder linkRecordDecoder) {
         activeStreams = CacheBuilder.newBuilder()
             .expireAfterAccess(10, TimeUnit.MINUTES)
             .removalListener((RemovalListener<Long, Boolean>) notification ->
@@ -123,7 +130,8 @@ public class SnapshotReadCache {
         return objectReplay.replay(objects);
     }
 
-    public synchronized CompletableFuture<Void> replay(WriteAheadLog confirmWAL, RecordOffset startOffset, RecordOffset endOffset) {
+    public synchronized CompletableFuture<Void> replay(WriteAheadLog confirmWAL, RecordOffset startOffset,
+        RecordOffset endOffset) {
         long startNanos = time.nanoseconds();
         return walReplay.replay(confirmWAL, startOffset, endOffset)
             .whenComplete((nil, ex) -> REPLAY_LATENCY.record(time.nanoseconds() - startNanos));
@@ -148,30 +156,67 @@ public class SnapshotReadCache {
     }
 
     class WalReplay {
+        private static final long TASK_WAITING_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(5);
+        private static final int MAX_WAITING_LOAD_TASK_COUNT = 4096;
         // soft limit the inflight memory
-        private final Semaphore inflightLimiter = new Semaphore(Systems.CPU_CORES * 4);
-        private final Queue<WalReplayTask> waitingLoadTasks = new ConcurrentLinkedQueue<>();
+        private final int maxInflightLoadingCount = Systems.CPU_CORES * 4;
+        private final BlockingQueue<WalReplayTask> waitingLoadTasks = new ArrayBlockingQueue<>(MAX_WAITING_LOAD_TASK_COUNT);
         private final Queue<WalReplayTask> loadingTasks = new ConcurrentLinkedQueue<>();
 
         public CompletableFuture<Void> replay(WriteAheadLog wal, RecordOffset startOffset, RecordOffset endOffset) {
-            inflightLimiter.acquireUninterruptibly();
             WalReplayTask task = new WalReplayTask(wal, startOffset, endOffset);
-            waitingLoadTasks.add(task);
+            while (!waitingLoadTasks.add(task)) {
+                // The replay won't be called on the SnapshotReadCache.eventLoop, so there won't be a deadlock.
+                eventLoop.submit(this::clearOverloadedTask).join();
+            }
             eventLoop.submit(this::tryLoad);
-            return task.replayCf.whenComplete((nil, ex) -> inflightLimiter.release());
+            return task.replayCf.whenCompleteAsync((nil, ex) -> tryLoad(), eventLoop);
         }
 
         @EventLoopSafe
         private void tryLoad() {
             for (; ; ) {
-                WalReplayTask task = waitingLoadTasks.poll();
+                if (loadingTasks.size() >= maxInflightLoadingCount) {
+                    break;
+                }
+                WalReplayTask task = waitingLoadTasks.peek();
                 if (task == null) {
                     break;
                 }
+                if (time.nanoseconds() - task.timestampNanos > TASK_WAITING_TIMEOUT_NANOS) {
+                    clearOverloadedTask();
+                    return;
+                }
+                waitingLoadTasks.poll();
                 loadingTasks.add(task);
                 task.run();
                 task.loadCf.whenCompleteAsync((rst, ex) -> tryPutIntoCache(), eventLoop);
             }
+        }
+
+        /**
+         * Clears all waiting tasks when the replay system is overloaded.
+         * This is triggered when tasks wait longer than TASK_WAITING_TIMEOUT_NANOS or waitingLoadTasks is full.
+         * All dropped tasks have their futures completed with null, and affected
+         * nodes are notified to commit their WAL to free up resources.
+         */
+        @EventLoopSafe
+        private void clearOverloadedTask() {
+            // The WalReplay is overloaded, so we need to drain all tasks promptly.
+            Set<Integer> nodeIds = new HashSet<>();
+            int dropCount = 0;
+            for (; ; ) {
+                WalReplayTask task = waitingLoadTasks.poll();
+                if (task == null) {
+                    break;
+                }
+                nodeIds.add(task.wal.metadata().nodeId());
+                task.loadCf.complete(null);
+                task.replayCf.complete(null);
+                dropCount++;
+            }
+            nodeIds.forEach(cacheFreeListener::notifyListener);
+            LOGGER.warn("wal replay is overloaded, drop all {} waiting tasks and request nodes={} to commit", dropCount, nodeIds);
         }
 
         @EventLoopSafe
@@ -190,6 +235,7 @@ public class SnapshotReadCache {
     }
 
     class WalReplayTask {
+        final long timestampNanos = time.nanoseconds();
         final WriteAheadLog wal;
         final RecordOffset startOffset;
         final RecordOffset endOffset;
@@ -204,7 +250,7 @@ public class SnapshotReadCache {
             this.loadCf = new CompletableFuture<>();
             loadCf.whenComplete((rst, ex) -> {
                 if (ex != null) {
-                    LOGGER.error("Replay WAL [{}, {}) fail", startOffset, endOffset, ex);
+                    LOGGER.error("Replay WAL [{}, {}) fail, wal={}", startOffset, endOffset, wal, ex);
                 }
             });
         }
@@ -219,7 +265,7 @@ public class SnapshotReadCache {
                     if (walRecord.getCount() >= 0) {
                         cfList.add(CompletableFuture.completedFuture(walRecord));
                     } else {
-                        cfList.add(linkRecordDecoder.apply(walRecord));
+                        cfList.add(linkRecordDecoder.decode(walRecord));
                     }
                 }
                 return CompletableFuture.allOf(cfList.toArray(new CompletableFuture[0])).whenComplete((rst, ex) -> {
@@ -230,9 +276,8 @@ public class SnapshotReadCache {
                         cfList.forEach(cf -> cf.thenAccept(StreamRecordBatch::release));
                         return;
                     }
-                    records.addAll(cfList.stream().map(CompletableFuture::join).collect(Collectors.toList()));
-                    // move to mem pool
-                    records.forEach(StreamRecordBatch::encoded);
+                    records.addAll(cfList.stream().map(CompletableFuture::join).toList());
+                    records.forEach(r -> r.encoded(ENCODE_ALLOC));
                     loadCf.complete(null);
                 });
             }).whenComplete((rst, ex) -> {
@@ -385,9 +430,11 @@ public class SnapshotReadCache {
                     requestCommitNodes.add(streamMetadata.nodeId());
                 }
             }
-            listeners.forEach(listener ->
-                requestCommitNodes.forEach(nodeId ->
-                    FutureUtil.suppress(() -> listener.onEvent(new RequestCommitEvent(nodeId)), LOGGER)));
+            requestCommitNodes.forEach(this::notifyListener);
+        }
+
+        public void notifyListener(int nodeId) {
+            listeners.forEach(listener -> FutureUtil.suppress(() -> listener.onEvent(new RequestCommitEvent(nodeId)), LOGGER));
         }
 
         public void addListener(EventListener listener) {

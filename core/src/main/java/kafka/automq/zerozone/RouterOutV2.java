@@ -34,9 +34,6 @@ import org.apache.kafka.common.requests.s3.AutomqZoneRouterRequest;
 import org.apache.kafka.common.requests.s3.AutomqZoneRouterResponse;
 import org.apache.kafka.common.utils.Time;
 
-import com.automq.stream.s3.network.AsyncNetworkBandwidthLimiter;
-import com.automq.stream.s3.network.GlobalNetworkBandwidthLimiters;
-import com.automq.stream.s3.network.NetworkBandwidthLimiter;
 import com.automq.stream.utils.Threads;
 
 import org.slf4j.Logger;
@@ -71,7 +68,6 @@ public class RouterOutV2 {
     private final GetRouterOutNode mapping;
     private final AsyncSender asyncSender;
     private final Time time;
-    private final NetworkBandwidthLimiter inboundLimiter = GlobalNetworkBandwidthLimiters.instance().get(AsyncNetworkBandwidthLimiter.Type.INBOUND);
 
     public RouterOutV2(Node currentNode, RouterChannel routerChannel, GetRouterOutNode mapping,
         NonBlockingLocalRouterHandler localRouterHandler, AsyncSender asyncSender, Time time) {
@@ -89,6 +85,7 @@ public class RouterOutV2 {
         Map<TopicPartition, ProduceResponse.PartitionResponse> responseMap = new ConcurrentHashMap<>();
         List<CompletableFuture<Void>> cfList = new ArrayList<>(args.entriesPerPartition().size());
         long startNanos = time.nanoseconds();
+        boolean acks0 = args.requiredAcks() == (short) 0;
         for (Map.Entry<TopicPartition, MemoryRecords> entry : args.entriesPerPartition().entrySet()) {
             TopicPartition tp = entry.getKey();
             MemoryRecords records = entry.getValue();
@@ -107,18 +104,32 @@ public class RouterOutV2 {
                 ProxyRequest proxyRequest = new ProxyRequest(tp, channelRst.epoch(), channelRst.channelOffset(), zoneRouterProduceRequest, recordSize, timeoutMillis);
                 sendProxyRequest(node, proxyRequest);
                 return proxyRequest.cf.thenAccept(response -> {
-                    responseMap.put(tp, response);
+                    if (!acks0) {
+                        responseMap.put(tp, response);
+                    }
                     ZeroZoneMetricsManager.PROXY_REQUEST_LATENCY.record(time.nanoseconds() - startNanos);
                 });
+            }).exceptionally(ex -> {
+                LOGGER.error("Exception in processing append proxies", ex);
+                // Make the producer retry send.
+                responseMap.put(tp, errorPartitionResponse(Errors.LEADER_NOT_AVAILABLE));
+                return null;
             });
             cfList.add(proxyCf);
         }
         Consumer<Map<TopicPartition, ProduceResponse.PartitionResponse>> responseCallback = args.responseCallback();
-        CompletableFuture<Void> cf = CompletableFuture.allOf(cfList.toArray(new CompletableFuture[0]));
-        cf.thenAccept(nil -> responseCallback.accept(responseMap)).exceptionally(ex -> {
-            LOGGER.error("[UNEXPECTED],[ROUTE_FAIL]", ex);
-            return null;
-        });
+        if (acks0) {
+            // When acks=0 is set, invoke the callback directly without waiting for data persistence to complete.
+            args.entriesPerPartition().forEach((tp, records) ->
+                responseMap.put(tp, new ProduceResponse.PartitionResponse(Errors.NONE)));
+            responseCallback.accept(responseMap);
+        } else {
+            CompletableFuture<Void> cf = CompletableFuture.allOf(cfList.toArray(new CompletableFuture[0]));
+            cf.thenAccept(nil -> responseCallback.accept(responseMap)).exceptionally(ex -> {
+                LOGGER.error("[UNEXPECTED],[ROUTE_FAIL]", ex);
+                return null;
+            });
+        }
     }
 
     private static short orderHint(TopicPartition tp, String connectionId) {
@@ -136,6 +147,10 @@ public class RouterOutV2 {
 
     interface Proxy {
         void send(ProxyRequest request);
+    }
+
+    static ProduceResponse.PartitionResponse errorPartitionResponse(Errors error) {
+        return new ProduceResponse.PartitionResponse(error, -1, -1, -1, -1, Collections.emptyList(), "");
     }
 
     static class LocalProxy implements Proxy {
@@ -164,6 +179,7 @@ public class RouterOutV2 {
 
     class RemoteProxy implements Proxy {
         private static final int MAX_INFLIGHT_SIZE = 64;
+        private static final long LINGER_NANOS = TimeUnit.MICROSECONDS.toNanos(100);
         private final Node node;
         private final Semaphore inflightLimiter = new Semaphore(MAX_INFLIGHT_SIZE);
         private final Queue<RequestBatch> requestBatchQueue = new ConcurrentLinkedQueue<>();
@@ -177,8 +193,8 @@ public class RouterOutV2 {
             ZeroZoneMetricsManager.recordRouterOutBytes(node.id(), request.recordSize);
             synchronized (this) {
                 if (requestBatch == null) {
-                    requestBatch = new RequestBatch(time, 1, 8192);
-                    Threads.COMMON_SCHEDULER.schedule(() -> trySendRequestBatch(requestBatch), 1, TimeUnit.MILLISECONDS);
+                    requestBatch = new RequestBatch(time, LINGER_NANOS, 8192);
+                    Threads.COMMON_SCHEDULER.schedule(() -> trySendRequestBatch(requestBatch), LINGER_NANOS, TimeUnit.NANOSECONDS);
                 }
                 if (requestBatch.add(request)) {
                     requestBatchQueue.add(requestBatch);
@@ -230,25 +246,32 @@ public class RouterOutV2 {
             );
             return asyncSender.sendRequest(node, builder).thenAccept(clientResponse -> {
                 if (!clientResponse.hasResponse()) {
-                    LOGGER.error("[ROUTER_OUT],[NO_RESPONSE],response={}", clientResponse);
-                    requests.forEach(ProxyRequest::completeWithUnknownError);
+                    LOGGER.error("[ROUTER_OUT],[NO_RESPONSE],node={},response={}", node, clientResponse);
+                    // Make the producer retry send.
+                    requests.forEach(r -> r.completeWithError(Errors.LEADER_NOT_AVAILABLE));
                     return;
                 }
                 if (LOGGER.isTraceEnabled()) {
-                    LOGGER.trace("[ROUTER_OUT],[RESPONSE],response={}", clientResponse);
+                    LOGGER.trace("[ROUTER_OUT],[RESPONSE],node={},response={}", node, clientResponse);
                 }
                 AutomqZoneRouterResponse zoneRouterResponse = (AutomqZoneRouterResponse) clientResponse.responseBody();
                 handleRouterResponse(zoneRouterResponse, requests);
             }).exceptionally(ex -> {
-                LOGGER.error("[ROUTER_OUT],[REQUEST_FAIL]", ex);
-                requests.forEach(ProxyRequest::completeWithUnknownError);
+                LOGGER.error("[ROUTER_OUT],[REQUEST_FAIL],node={}", node, ex);
+                requests.forEach(r -> r.completeWithError(Errors.LEADER_NOT_AVAILABLE));
                 return null;
             });
         }
 
         private void handleRouterResponse(AutomqZoneRouterResponse zoneRouterResponse, List<ProxyRequest> requests) {
-            if (zoneRouterResponse.data().errorCode() != Errors.NONE.code()) {
-                Errors error = Errors.forCode(zoneRouterResponse.data().errorCode());
+            short errorCode = zoneRouterResponse.data().errorCode();
+            if (errorCode == Errors.UNKNOWN_SERVER_ERROR.code()) {
+                // We could find the detail error log in the rpc server side.
+                // Set the error to LEADER_NOT_AVAILABLE to make the producer retry sending.
+                errorCode = Errors.LEADER_NOT_AVAILABLE.code();
+            }
+            if (errorCode != Errors.NONE.code()) {
+                Errors error = Errors.forCode(errorCode);
                 requests.forEach(r -> r.completeWithError(error));
                 return;
             }
@@ -276,9 +299,9 @@ public class RouterOutV2 {
         private final long batchSize;
         private final Map<Long, List<ProxyRequest>> requests = new TreeMap<>();
 
-        public RequestBatch(Time time, long lingerMs, int batchSize) {
+        public RequestBatch(Time time, long lingerNanos, int batchSize) {
             this.time = time;
-            this.lingerNanos = TimeUnit.MILLISECONDS.toNanos(lingerMs);
+            this.lingerNanos = lingerNanos;
             this.batchSize = batchSize;
             this.batchStartNanos = System.nanoTime();
         }
@@ -312,7 +335,8 @@ public class RouterOutV2 {
         final long timeoutMillis;
         final CompletableFuture<ProduceResponse.PartitionResponse> cf = new CompletableFuture<>();
 
-        public ProxyRequest(TopicPartition topicPartition, long epoch, ByteBuf channelOffset, ZoneRouterProduceRequest zoneRouterProduceRequest, int recordSize, long timeoutMillis) {
+        public ProxyRequest(TopicPartition topicPartition, long epoch, ByteBuf channelOffset,
+            ZoneRouterProduceRequest zoneRouterProduceRequest, int recordSize, long timeoutMillis) {
             this.topicPartition = topicPartition;
             this.epoch = epoch;
             this.channelOffset = channelOffset;
@@ -326,12 +350,13 @@ public class RouterOutV2 {
         }
 
         private void completeWithError(Errors errors) {
-            ProduceResponse.PartitionResponse rst = new ProduceResponse.PartitionResponse(errors, -1, -1, -1, -1, Collections.emptyList(), "");
+            ProduceResponse.PartitionResponse rst = errorPartitionResponse(errors);
             cf.complete(rst);
         }
     }
 
-    private static ZoneRouterProduceRequest zoneRouterProduceRequest(ProduceRequestArgs args, short flag, TopicPartition tp,
+    private static ZoneRouterProduceRequest zoneRouterProduceRequest(ProduceRequestArgs args, short flag,
+        TopicPartition tp,
         MemoryRecords records) {
         ProduceRequestData data = new ProduceRequestData();
         data.setTransactionalId(args.transactionId());
