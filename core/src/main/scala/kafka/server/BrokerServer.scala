@@ -202,9 +202,6 @@ class BrokerServer(
 
   override def startup(): Unit = {
     if (!maybeChangeStatus(SHUTDOWN, STARTING)) return
-    info("checking cluster nodes count..")
-    if (!fingerPrintControlManagerV1.isActiveBrokerCountWithinLimit) return
-    info("nodes count check passed,broker starting...")
     val startupDeadline = Deadline.fromDelay(time, config.serverMaxStartupTimeMs, TimeUnit.MILLISECONDS)
     try {
       sharedServer.startForBroker()
@@ -563,6 +560,11 @@ class BrokerServer(
       FutureUtils.waitWithLogging(logger.underlying, logIdent,
         "the initial broker metadata update to be published",
         brokerMetadataPublisher.firstPublishFuture , startupDeadline, time)
+//      todo
+      FingerPrintControlManagerProvider.setMetadataCache(metadataCache);
+      info("checking cluster nodes count..")
+      if (!fingerPrintControlManagerV1.isActiveBrokerCountWithinLimit) return
+      info("nodes count check passed,broker starting...")
 
       // Now that we have loaded some metadata, we can log a reasonably up-to-date broker
       // configuration.  Keep in mind that KafkaConfig.originals is a mutable field that gets set

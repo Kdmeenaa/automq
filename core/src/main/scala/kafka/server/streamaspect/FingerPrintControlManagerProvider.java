@@ -17,6 +17,8 @@
 
 package kafka.server.streamaspect;
 
+import kafka.server.MetadataCache;
+
 import org.apache.kafka.controller.ClusterControlManager;
 import org.apache.kafka.controller.FingerPrintControlManagerV1;
 import org.apache.kafka.controller.QuorumController;
@@ -112,10 +114,21 @@ public final class FingerPrintControlManagerProvider {
                 ClusterControlManager.class
             );
             initializeMethod.invoke(manager, controller, clusterControlManager);
-        } catch (NoSuchMethodException e) {
-            LOG.debug("FingerPrintControlManagerV1 implementation {} does not declare an initialize method", manager.getClass().getName());
-        } catch (Throwable t) {
+        }catch (Throwable t) {
             LOG.warn("Failed to initialize FingerPrintControlManagerV1 implementation {}", manager.getClass().getName(), t);
+        }
+    }
+
+    public static void setMetadataCache(MetadataCache metadataCache) {
+        try {
+            FingerPrintControlManagerV1 manager = get();
+            Method initializeMethod = manager.getClass().getMethod(
+                "setMetadataCache",
+                MetadataCache.class
+            );
+            initializeMethod.invoke(manager, metadataCache);
+        }catch (Throwable t) {
+
         }
     }
 }
