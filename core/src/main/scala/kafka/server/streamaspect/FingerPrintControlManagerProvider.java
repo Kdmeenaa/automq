@@ -17,10 +17,9 @@
 
 package kafka.server.streamaspect;
 
-import kafka.server.MetadataCache;
 
 import org.apache.kafka.controller.ClusterControlManager;
-import org.apache.kafka.controller.FingerPrintControlManagerV1;
+import org.apache.kafka.controller.FPCManager;
 import org.apache.kafka.controller.QuorumController;
 
 import org.slf4j.Logger;
@@ -30,7 +29,7 @@ import java.lang.reflect.Method;
 import java.util.ServiceLoader;
 
 /**
- * Provider responsible for loading and exposing {@link FingerPrintControlManagerV1} implementations.
+ * Provider responsible for loading and exposing {@link FPCManager} implementations.
  * <p>
  * The provider guarantees that the {@link ServiceLoader} lookup is executed at most once per
  * ClassLoader and exposes the result to both controller (metadata) and broker (core) code paths.
@@ -39,17 +38,17 @@ public final class FingerPrintControlManagerProvider {
     private static final Logger LOG = LoggerFactory.getLogger(FingerPrintControlManagerProvider.class);
     private static final Object INIT_LOCK = new Object();
 
-    private static volatile FingerPrintControlManagerV1 cachedInstance;
+    private static volatile FPCManager cachedInstance;
 
     private FingerPrintControlManagerProvider() {
         // utility class
     }
 
     /**
-     * Returns the lazily-loaded {@link FingerPrintControlManagerV1} implementation, or {@code null} if none is found.
+     * Returns the lazily-loaded {@link FPCManager} implementation, or {@code null} if none is found.
      */
-    public static FingerPrintControlManagerV1 get() {
-        FingerPrintControlManagerV1 current = cachedInstance;
+    public static FPCManager get() {
+        FPCManager current = cachedInstance;
         if (current == null) {
             synchronized (INIT_LOCK) {
                 current = cachedInstance;
@@ -65,24 +64,24 @@ public final class FingerPrintControlManagerProvider {
      * Convenience helper used by the controller to both retrieve and initialize the implementation
      * (if it exposes a compatible {@code initialize(QuorumController, ClusterControlManager)} method).
      */
-    public static FingerPrintControlManagerV1 getAndInitialize(
+    public static FPCManager getAndInitialize(
         QuorumController controller,
         ClusterControlManager clusterControlManager
     ) {
-        FingerPrintControlManagerV1 manager = get();
+        FPCManager manager = get();
         if (manager != null) {
             initialize(manager, controller, clusterControlManager);
         }
         return manager;
     }
 
-    private static FingerPrintControlManagerV1 loadService() {
+    private static FPCManager loadService() {
         try {
-            ServiceLoader<FingerPrintControlManagerV1> loader =
-                ServiceLoader.load(FingerPrintControlManagerV1.class, FingerPrintControlManagerV1.class.getClassLoader());
+            ServiceLoader<FPCManager> loader =
+                ServiceLoader.load(FPCManager.class, FPCManager.class.getClassLoader());
 
-            FingerPrintControlManagerV1 first = null;
-            for (FingerPrintControlManagerV1 impl : loader) {
+            FPCManager first = null;
+            for (FPCManager impl : loader) {
                 if (first != null) {
                     LOG.warn("Multiple FingerPrintControlManagerV1 implementations found. Using {}", first.getClass().getName());
                     break;
@@ -103,7 +102,7 @@ public final class FingerPrintControlManagerProvider {
     }
 
     private static void initialize(
-        FingerPrintControlManagerV1 manager,
+        FPCManager manager,
         QuorumController controller,
         ClusterControlManager clusterControlManager
     ) {
@@ -119,16 +118,16 @@ public final class FingerPrintControlManagerProvider {
         }
     }
 
-    public static void setMetadataCache(MetadataCache metadataCache) {
-        try {
-            FingerPrintControlManagerV1 manager = get();
-            Method initializeMethod = manager.getClass().getMethod(
-                "setMetadataCache",
-                MetadataCache.class
-            );
-            initializeMethod.invoke(manager, metadataCache);
-        } catch (Throwable t) {
-
-        }
-    }
+//    public static void setMetadataCache(MetadataCache metadataCache) {
+//        try {
+//            FingerPrintControlManagerV1 manager = get();
+//            Method initializeMethod = manager.getClass().getMethod(
+//                "setMetadataCache",
+//                MetadataCache.class
+//            );
+//            initializeMethod.invoke(manager, metadataCache);
+//        } catch (Throwable t) {
+//
+//        }
+//    }
 }

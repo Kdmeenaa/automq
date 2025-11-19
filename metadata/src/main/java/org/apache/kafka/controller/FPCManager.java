@@ -9,28 +9,22 @@ import org.apache.kafka.common.protocol.ApiMessage;
 import java.util.Map;
 
 
-public interface FingerPrintControlManagerV1  extends Reconfigurable {
+public interface FPCManager extends Reconfigurable {
     String TIME_KEY = "createdTimestamp";
-    String NODE_COUNT_KEY = "maxNodeCount";
 
     String installId();
 
     boolean checkLicense();
-//    void checkLicense(Map<String, String> configs, String installId);
 
     boolean startScheduleCheck();
-//
+
     boolean replay(KVRecord record);
 
     boolean replayLicenseConfig(ApiMessage record);
-//
+
     boolean recordExists();
 
     boolean updateDynamicConfig(Map<ConfigResource, Map<String, Map.Entry<AlterConfigOp.OpType, String>>> configChanges);
 
     boolean legacyUpdateDynamicConfig(Map<ConfigResource, Map<String, String>> newConfigs);
-
-    boolean checkClusterNodesAndMayFence();
-
-    boolean isActiveBrokerCountWithinLimit();
 }

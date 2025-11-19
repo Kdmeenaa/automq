@@ -25,7 +25,7 @@ import kafka.server.streamaspect.FingerPrintControlManagerProvider;
 import org.apache.kafka.common.metadata.KVRecord;
 import org.apache.kafka.common.metadata.MetadataRecordType;
 import org.apache.kafka.common.protocol.ApiMessage;
-import org.apache.kafka.controller.FingerPrintControlManagerV1;
+import org.apache.kafka.controller.FPCManager;
 import org.apache.kafka.controller.QuorumController;
 import org.apache.kafka.controller.QuorumControllerExtension;
 import org.apache.kafka.raft.OffsetAndEpoch;
@@ -35,7 +35,7 @@ import java.util.Optional;
 
 public class DefaultQuorumControllerExtension implements QuorumControllerExtension {
     private final FailoverControlManager failoverControlManager;
-    private final FingerPrintControlManagerV1 fingerPrintControlManager;
+    private final FPCManager fingerPrintControlManager;
 
     public DefaultQuorumControllerExtension(QuorumController controller) {
         this.failoverControlManager = new FailoverControlManager(

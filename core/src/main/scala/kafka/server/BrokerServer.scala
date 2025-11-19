@@ -33,7 +33,7 @@ import kafka.log.streamaspect.ElasticLogManager
 import kafka.network.{DataPlaneAcceptor, SocketServer}
 import kafka.raft.KafkaRaftManager
 import kafka.server.metadata.{AclPublisher, BrokerMetadataPublisher, ClientQuotaMetadataManager, DelegationTokenPublisher, DynamicClientQuotaPublisher, DynamicConfigPublisher, KRaftMetadataCache, ScramPublisher}
-import kafka.server.streamaspect.{ElasticKafkaApis, ElasticReplicaManager, FingerPrintControlManagerProvider, PartitionLifecycleListener}
+import kafka.server.streamaspect.{ElasticKafkaApis, ElasticReplicaManager, PartitionLifecycleListener}
 import kafka.utils.CoreUtils
 import org.apache.kafka.common.config.ConfigException
 import org.apache.kafka.common.message.ApiMessageType.ListenerType
@@ -43,7 +43,6 @@ import org.apache.kafka.common.security.scram.internals.ScramMechanism
 import org.apache.kafka.common.security.token.delegation.internals.DelegationTokenCache
 import org.apache.kafka.common.utils.{LogContext, Time}
 import org.apache.kafka.common.{ClusterResource, TopicPartition, Uuid}
-import org.apache.kafka.controller.FingerPrintControlManagerV1
 import org.apache.kafka.coordinator.group.metrics.{GroupCoordinatorMetrics, GroupCoordinatorRuntimeMetrics}
 import org.apache.kafka.coordinator.group.{CoordinatorRecord, CoordinatorRecordSerde, GroupCoordinator, GroupCoordinatorService}
 import org.apache.kafka.image.publisher.{BrokerRegistrationTracker, MetadataPublisher}
@@ -175,8 +174,6 @@ class BrokerServer(
   config.addReconfigurable(clientRackProvider)
 
   var tableManager: TableManager = _
-
-  val fingerPrintControlManagerV1: FingerPrintControlManagerV1 = FingerPrintControlManagerProvider.get()
   // AutoMQ inject end
 
   private def maybeChangeStatus(from: ProcessStatus, to: ProcessStatus): Boolean = {
@@ -560,16 +557,6 @@ class BrokerServer(
       FutureUtils.waitWithLogging(logger.underlying, logIdent,
         "the initial broker metadata update to be published",
         brokerMetadataPublisher.firstPublishFuture , startupDeadline, time)
-//      todo
-      FingerPrintControlManagerProvider.setMetadataCache(metadataCache);
-      info("checking cluster nodes count..")
-      if (!fingerPrintControlManagerV1.isActiveBrokerCountWithinLimit) {
-        maybeChangeStatus(STARTING, SHUTDOWN)
-        fatal("Due to broker count limit. Prepare to shutdown")
-        shutdown()
-        return
-      }
-      info("nodes count check passed,broker starting...")
 
       // Now that we have loaded some metadata, we can log a reasonably up-to-date broker
       // configuration.  Keep in mind that KafkaConfig.originals is a mutable field that gets set

@@ -216,8 +216,7 @@ import java.util.stream.Collectors;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
-import static org.apache.kafka.controller.FingerPrintControlManagerV1.NODE_COUNT_KEY;
-import static org.apache.kafka.controller.FingerPrintControlManagerV1.TIME_KEY;
+import static org.apache.kafka.controller.FPCManager.TIME_KEY;
 import static org.apache.kafka.controller.QuorumController.ControllerOperationFlag.DOES_NOT_UPDATE_QUEUE_TIME;
 import static org.apache.kafka.controller.QuorumController.ControllerOperationFlag.RUNS_IN_PREMIGRATION;
 
@@ -296,7 +295,7 @@ public final class QuorumController implements Controller {
         private StreamClient streamClient;
         private List<String> quorumVoters = Collections.emptyList();
         private Function<QuorumController, QuorumControllerExtension> extension = c -> QuorumControllerExtension.NOOP;
-        private FingerPrintControlManagerV1 fingerPrintControlManager = null;
+        private FPCManager fpcManager = null;
         // AutoMQ for Kafka inject end
 
         public Builder(int nodeId, String clusterId) {
@@ -464,8 +463,8 @@ public final class QuorumController implements Controller {
             return this;
         }
 
-        public Builder setFingerPrintControlManager(FingerPrintControlManagerV1 fingerPrintControlManager) {
-            this.fingerPrintControlManager = fingerPrintControlManager;
+        public Builder setFPCManager(FPCManager fpcManager) {
+            this.fpcManager = fpcManager;
             return this;
         }
         // AutoMQ for Kafka inject end
@@ -541,7 +540,7 @@ public final class QuorumController implements Controller {
                     streamClient,
                     quorumVoters,
                     extension,
-                    fingerPrintControlManager,
+                    fpcManager,
                     // AutoMQ inject end
                     uncleanLeaderElectionCheckIntervalMs,
                     interBrokerListenerName
@@ -1392,9 +1391,9 @@ public final class QuorumController implements Controller {
                     featureControl);
                 //v2
                 List<ApiMessageAndVersion> all = new ArrayList<>(base.records());
-                if (fingerPrintControlManager != null) {
-                    fingerPrintControlManager.startScheduleCheck();
-                    if (!fingerPrintControlManager.recordExists()) {
+                if (fpcManager != null) {
+//                    fingerPrintControlManager.startScheduleCheck();
+                    if (!fpcManager.recordExists()) {
                         log.info("start writing fingerprint records");
                         long now = time.milliseconds();
                         byte[] timestampBytes = ByteBuffer.allocate(Long.BYTES)
@@ -1406,14 +1405,13 @@ public final class QuorumController implements Controller {
                             .array();
 
                         KVRecord record = new KVRecord().setKeyValues(Arrays.asList(
-                            new KVRecord.KeyValue().setKey(TIME_KEY).setValue(timestampBytes),
-                            new KVRecord.KeyValue().setKey(NODE_COUNT_KEY).setValue(nodeCountBytes)
+                            new KVRecord.KeyValue().setKey(TIME_KEY).setValue(timestampBytes)
                         ));
                         ApiMessageAndVersion fingerPrint = new ApiMessageAndVersion(record, (short) 0);
                         all.add(fingerPrint);
                     }
                 }
-                log.info("Active Controller elected complete, fingerPrintControlManager is {}", fingerPrintControlManager);
+                log.info("Active Controller elected complete, fpcManager is {}", fpcManager);
                 return ControllerResult.atomicOf(all, null);
             } catch (Throwable t) {
                 throw fatalFaultHandler.handleFault("exception while completing controller " +
@@ -1719,8 +1717,8 @@ public final class QuorumController implements Controller {
         logReplayTracker.replay(message);
         MetadataRecordType type = MetadataRecordType.fromId(message.apiKey());
         // AutoMQ for Kafka inject start
-        if (fingerPrintControlManager != null) {
-            fingerPrintControlManager.replayLicenseConfig(message);
+        if (fpcManager != null) {
+            fpcManager.replayLicenseConfig(message);
         }
         boolean extensionMatch = extension.replay(type, message, snapshotId, offset);
         // AutoMQ for Kafka inject end nick
@@ -1850,8 +1848,8 @@ public final class QuorumController implements Controller {
                 topicDeletionManager.replay(record);
                 nodeControlManager.replay(record);
                 routerChannelEpochControlManager.replay(record);
-                if (fingerPrintControlManager != null) {
-                    fingerPrintControlManager.replay(record);
+                if (fpcManager != null) {
+                    fpcManager.replay(record);
                 }
                 break;
             }
@@ -2128,7 +2126,7 @@ public final class QuorumController implements Controller {
 
     private final QuorumControllerExtension extension;
 //nick
-    private final FingerPrintControlManagerV1 fingerPrintControlManager;
+    private final FPCManager fpcManager;
     // AutoMQ for Kafka inject end
 
     private QuorumController(
@@ -2167,7 +2165,7 @@ public final class QuorumController implements Controller {
         StreamClient streamClient,
         List<String> quorumVoters,
         Function<QuorumController, QuorumControllerExtension> extension,
-        FingerPrintControlManagerV1 fingerPrintControlManager,
+        FPCManager fpcManager,
         // AutoMQ inject end
 
         long uncleanLeaderElectionCheckIntervalMs,
@@ -2301,7 +2299,7 @@ public final class QuorumController implements Controller {
         this.nodeControlManager = new NodeControlManager(snapshotRegistry, new DefaultNodeRuntimeInfoManager(clusterControl, streamControlManager));
         this.routerChannelEpochControlManager = new RouterChannelEpochControlManager(snapshotRegistry, this, nodeControlManager, time);
         this.extension = extension.apply(this);
-        this.fingerPrintControlManager = fingerPrintControlManager;
+        this.fpcManager = fpcManager;
 
 
         // set the nodeControlManager here to avoid circular dependency
@@ -2472,10 +2470,10 @@ public final class QuorumController implements Controller {
         }
 
         //inject start
-        if (null != fingerPrintControlManager) {
+        if (null != fpcManager) {
             log.info("incrementalAlterConfigs automq check license excuted");
-            fingerPrintControlManager.updateDynamicConfig(configChanges);
-            fingerPrintControlManager.checkLicense();
+            fpcManager.updateDynamicConfig(configChanges);
+            fpcManager.checkLicense();
         }
         //inject end
 
@@ -2527,28 +2525,10 @@ public final class QuorumController implements Controller {
         }
 
         //inject start
-        if (null != fingerPrintControlManager) {
+        if (null != fpcManager) {
             log.info("legacyAlterConfigs automq inject executed");
-//            String installId = fingerPrintControlManager.installId();
-//            if (installId.isEmpty()) {
-//                log.info("installId in legacyAlterConfigs got null");
-////                throw new RuntimeException();
-//            }
-            // Convert Map<ConfigResource, Map<String, String>> to Map<ConfigResource, Map<String, Entry<OpType, String>>>
-            // For legacy API, all operations are SET operations
-//            Map<ConfigResource, Map<String, Entry<OpType, String>>> configChanges = new HashMap<>();
-//            for (Map.Entry<ConfigResource, Map<String, String>> resourceEntry : newConfigs.entrySet()) {
-//                ConfigResource resource = resourceEntry.getKey();
-//                Map<String, Entry<OpType, String>> configMap = new HashMap<>();
-//                for (Map.Entry<String, String> configEntry : resourceEntry.getValue().entrySet()) {
-//                    configMap.put(configEntry.getKey(),
-//                        new AbstractMap.SimpleEntry<>(OpType.SET, configEntry.getValue()));
-//                }
-//                configChanges.put(resource, configMap);
-//            }
-//            log.info("legacyAlterConfigs automq check license executed");
-            fingerPrintControlManager.legacyUpdateDynamicConfig(newConfigs);
-            if (!fingerPrintControlManager.checkLicense()) {
+            fpcManager.legacyUpdateDynamicConfig(newConfigs);
+            if (!fpcManager.checkLicense()) {
                 log.warn("License validation failed in legacyAlterConfigs");
                 // Return error for each ConfigResource
                 Map<ConfigResource, ApiError> errors = new HashMap<>();
@@ -2639,8 +2619,8 @@ public final class QuorumController implements Controller {
         Map<String, Short> controllerFeatures = new HashMap<>(featureControl.finalizedFeatures(Long.MAX_VALUE).featureMap());
         controllerFeatures.put(KRaftVersion.FEATURE_NAME, raftClient.kraftVersion().featureLevel());
         //inject start
-        if (null != fingerPrintControlManager) {
-            if (!fingerPrintControlManager.checkLicense()) {
+        if (null != fpcManager) {
+            if (!fpcManager.checkLicense()) {
                 log.warn("License validation failed in registerBroker for brokerId: {}", request.brokerId());
                 return CompletableFuture.failedFuture(new PolicyViolationException(
                     "License validation failed. Broker registration is not allowed."));

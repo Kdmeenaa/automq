@@ -40,7 +40,7 @@ import org.apache.kafka.common.security.token.delegation.internals.DelegationTok
 import org.apache.kafka.common.utils.LogContext
 import org.apache.kafka.common.{ClusterResource, Endpoint, Reconfigurable, Uuid}
 import org.apache.kafka.controller.metrics.{ControllerMetadataMetricsPublisher, QuorumControllerMetrics}
-import org.apache.kafka.controller.{FingerPrintControlManagerV1, QuorumController, QuorumControllerExtension, QuorumFeatures}
+import org.apache.kafka.controller.{FPCManager, QuorumController, QuorumControllerExtension, QuorumFeatures}
 import org.apache.kafka.image.publisher.{ControllerRegistrationsPublisher, MetadataPublisher}
 import org.apache.kafka.metadata.{KafkaConfigSchema, ListenerInfo}
 import org.apache.kafka.metadata.authorizer.ClusterMetadataAuthorizer
@@ -135,7 +135,7 @@ class ControllerServer(
   @volatile var registrationChannelManager: NodeToControllerChannelManager = _
 
   var autoBalancerManager: AutoBalancerService = _
-  @volatile var fingerPrintControlManager: FingerPrintControlManagerV1 = _
+  @volatile var fpcManager: FPCManager = _
 
 
   protected def buildAutoBalancerManager: AutoBalancerService = {
@@ -188,7 +188,7 @@ class ControllerServer(
       registrationsPublisher = new ControllerRegistrationsPublisher()
 
       incarnationId = Uuid.randomUuid()
-      fingerPrintControlManager = FingerPrintControlManagerProvider.get()
+      fpcManager = FingerPrintControlManagerProvider.get()
 
       val apiVersionManager = new SimpleApiVersionManager(
         ListenerType.CONTROLLER,
@@ -298,7 +298,7 @@ class ControllerServer(
           setExtension(c => quorumControllerExtension(c)).
           setQuorumVoters(config.quorumVoters).
           setReplicaPlacer(replicaPlacer()).
-          setFingerPrintControlManager(fingerPrintControlManager).
+          setFPCManager(fpcManager).
           // AutoMQ inject end
           setUncleanLeaderElectionCheckIntervalMs(config.uncleanLeaderElectionCheckIntervalMs).
           setInterBrokerListenerName(config.interBrokerListenerName.value()).
@@ -306,7 +306,7 @@ class ControllerServer(
       }
       controller = controllerBuilder.build()
 //      fingerPrintControlManager = FingerPrintControlManagerProvider.get()
-      fingerPrintControlManager = FingerPrintControlManagerProvider.getAndInitialize(controller, controller.clusterControl())
+      fpcManager = FingerPrintControlManagerProvider.getAndInitialize(controller, controller.clusterControl())
 
       // If we are using a ClusterMetadataAuthorizer, requests to add or remove ACLs must go
       // through the controller.
@@ -600,7 +600,7 @@ class ControllerServer(
   def reconfigurables(): java.util.List[Reconfigurable] = {
     java.util.List.of(
       autoBalancerManager,
-      fingerPrintControlManager
+      fpcManager
     )
   }
   // AutoMQ for Kafka inject end
